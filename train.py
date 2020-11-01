@@ -9,8 +9,7 @@ import argparse
 import torch.nn as nn
 import torch.nn.functional as F
 from Imagefolder_modified import Imagefolder_modified
-from resnet import ResNet18_Normalized, ResNet50_Normalized
-from bcnn import BCNN_Normalized,BCNN
+from resnet import ResNet18_Normalized, ResNet50
 from PIL import ImageFile # Python：IOError: image file is truncated 的解决办法
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
@@ -40,27 +39,51 @@ class Manager(object):
         self._tk = options['tk']
         self._warmup= options['warmup']
         self._step = options['step']
-        print('Basic information: ','data:',self._data_base,'  lr:', self._options['base_lr'],'  w_decay:', self._options['weight_decay'])
+        self._prtmodel = os.path.join(options['prtmodel_path'], options['net'] + '_uniform_e200.pth')
+        print('Basic information: ','net:',options['net'], 'prtmodel:',self._prtmodel,'data:',self._data_base,'  lr:', self._options['base_lr'],'  w_decay:', self._options['weight_decay'])
         print('Parameter information: ','denoise:',self._denoise,'  drop_rate:',self._drop_rate,'  smooth:',self._smooth,'  label_weight:',self._label_weight,'  tk:',self._tk, '  warmup:',self._warmup)
         print('------------------------------------------------------------------------------')
         # Network
         # We recommend resnet18, which takes less time to train
-        if options['net'] == 'resnet18':
-            NET = ResNet18_Normalized
+        if options['net'] == 'resnet152':
+            print("to be code...")
         elif options['net'] == 'resnet50':
-            NET = ResNet50_Normalized
-        elif options['net'] == 'bcnn':
-            NET = BCNN_Normalized
+            NET = ResNet50
         else:
             raise AssertionError('Not implemented yet')
 
-        if self._step == 1:
-            net = NET(n_classes=options['n_classes'], pretrained=True)
-        elif self._step == 2:
-            net = NET(n_classes=options['n_classes'], pretrained=False)
-        else:
-            raise AssertionError('Wrong step')
+        # if self._step == 1:
+        #     net = NET(n_classes=options['n_classes'], pretrained=True)
+        # elif self._step == 2:
+        #     net = NET(n_classes=options['n_classes'], pretrained=False)
+        # else:
+        #     raise AssertionError('Wrong step')
+
         # self._net = net.cuda()
+
+        net = NET(n_classes=options['n_classes'])
+
+        
+        print('Loading model from %s' % (self._prtmodel))
+        
+        checkpoint = torch.load(self._prtmodel)          
+        model_state = checkpoint['state_dict_best']
+        
+        # self.centroids = checkpoint['centroids'] if 'centroids' in checkpoint else None
+        
+        weights = model_state['feat_model']
+        weights = {k: weights[k] for k in weights if k in net.state_dict()}
+        x = net.state_dict()
+        x.update(weights)
+        net.load_state_dict(x)
+
+
+
+        for params in net.features.parameters():
+            params.required_grad = False
+        print("useing freeze......................")
+
+
         if torch.cuda.device_count() >= 1:
             self._net = torch.nn.DataParallel(net).cuda()
             print('cuda device : ', torch.cuda.device_count())
@@ -71,17 +94,22 @@ class Manager(object):
         # Criterion
         self._criterion = torch.nn.CrossEntropyLoss().cuda()
         # Optimizer
-        if options['net'] == 'bcnn':
-            # bcnn needs two-step training
-            if self._step == 1:
-                params_to_optimize = self._net.module.fc.parameters()
-                print('step1')
-            else:
-                self._net.load_state_dict(torch.load(os.path.join(self._path, 'bcnn_step1.pth')))
-                print('step2, loading model')
-                params_to_optimize = self._net.parameters()
-        else:
-            params_to_optimize = self._net.parameters()
+
+
+        # if options['net'] == 'bcnn':
+        #     # bcnn needs two-step training
+        #     if self._step == 1:
+        #         params_to_optimize = self._net.module.fc.parameters()
+        #         print('step1')
+        #     else:
+        #         self._net.load_state_dict(torch.load(os.path.join(self._path, 'bcnn_step1.pth')))
+        #         print('step2, loading model')
+        #         params_to_optimize = self._net.parameters()
+        # else:
+        #     params_to_optimize = self._net.parameters()
+        
+        params_to_optimize = self._net.module.fc.parameters()
+
 
         self._optimizer = torch.optim.SGD(params_to_optimize, lr=self._options['base_lr'], momentum=0.9,
                                               weight_decay=self._options['weight_decay'])
@@ -100,27 +128,26 @@ class Manager(object):
             print('lr_scheduler: CosineAnnealingLR')
 
         train_transform = torchvision.transforms.Compose([
-            torchvision.transforms.Resize(size=448),
+            torchvision.transforms.RandomResizedCrop(224),
             torchvision.transforms.RandomHorizontalFlip(),
-            torchvision.transforms.RandomCrop(size=448),
             torchvision.transforms.ToTensor(),
             torchvision.transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
         ])
         test_transform = torchvision.transforms.Compose([
-            torchvision.transforms.Resize(size=448),
-            torchvision.transforms.RandomCrop(size=448),
+            torchvision.transforms.Resize(size=256),
+            torchvision.transforms.CenterCrop(size=224),
             torchvision.transforms.ToTensor(),
             torchvision.transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
         ])
 
         # Load data
         data_dir = self._data_base
-        train_data = Imagefolder_modified(os.path.join(data_dir, 'train'), transform=train_transform)
+        train_data = Imagefolder_modified(os.path.join(data_dir, 'train.txt'), transform=train_transform)
         # If you want to load images into RAM once, set 'cached=True'
-        test_data = Imagefolder_modified(os.path.join(data_dir, 'val'), transform=test_transform, cached=False)
-        print('number of classes in trainset is : {}'.format(len(train_data.classes)))
-        print('number of classes in testset is : {}'.format(len(test_data.classes)))
-        assert len(train_data.classes) == options['n_classes'] and len(test_data.classes) == options['n_classes'], 'number of classes is wrong'
+        test_data = Imagefolder_modified(os.path.join(data_dir, 'val.txt'), transform=test_transform, cached=False)
+        # print('number of classes in trainset is : {}'.format(len(train_data.classes)))
+        # print('number of classes in testset is : {}'.format(len(test_data.classes)))
+        # assert len(train_data.classes) == options['n_classes'] and len(test_data.classes) == options['n_classes'], 'number of classes is wrong'
         self._train_loader = DataLoader(train_data, batch_size=self._options['batch_size'],
                                         shuffle=True, num_workers=4, pin_memory=True)
         self._test_loader = DataLoader(test_data, batch_size=16,
@@ -168,7 +195,9 @@ class Manager(object):
         Train the network
         """
         print('Training ... ')
+        logfile = 'train_log.txt'
         best_accuracy = 0.0
+        best_epoch = 0
         print('Epoch\tTrain Loss\tTrain Accuracy\tTest Accuracy\tEpoch Runtime')
         for t in range(self._options['epochs']):
             if self._warmup >t:
@@ -244,6 +273,7 @@ class Manager(object):
 
             if test_accuracy > best_accuracy:
                 best_accuracy = test_accuracy
+                best_epoch = t +1
                 print('*', end='')
                 # Save mode
                 if options['net'] == 'bcnn':
@@ -254,7 +284,22 @@ class Manager(object):
             print('%d\t%4.3f\t\t%4.2f%%\t\t%4.2f%%\t\t%4.2f\t\t%4.2f' % (t + 1, sum(epoch_loss) / len(epoch_loss),
                                                             train_accuracy, test_accuracy,
                                                             epoch_end - epoch_start, num_remember))
+                                                          
+            with open(logfile, "a") as f:
+                output = '%d\t%4.3f\t\t%4.2f%%\t\t%4.2f%%\t\t%4.2f\t\t%4.2f' % (t + 1, sum(epoch_loss) / len(epoch_loss),
+                                                            train_accuracy, test_accuracy,
+                                                            epoch_end - epoch_start, num_remember)
+                f.write(output + "\n")
 
+
+        print('******\n'
+        'Best Accuracy 1: [{0:6.2f}], at Epoch [{1:03d}] '
+        '\n******'.format(best_accuracy, best_epoch))
+        with open(logfile, "a") as f:
+            output = '******\n' \
+                    'Best Accuracy 1: [{0:6.2f}], at Epoch [{1:03d}]; ' \
+                    '\n******'.format(best_accuracy, best_epoch)
+            f.write(output + "\n")
         print('-----------------------------------------------------------------')
 
     def test(self, dataloader):
@@ -285,12 +330,14 @@ class Manager(object):
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='PyTorch Training')
-    parser.add_argument('--net', dest='net', type=str, default='resnet18',
-                        help='supported options: resnet18, resnet50, bcnn')
+    parser.add_argument('--net', dest='net', type=str, default='resnet50',
+                        help='supported options: resnet18, resnet50')
     parser.add_argument('--n_classes', dest='n_classes', type=int, default=200,
                         help='number of classes')
     # Path to save model
     parser.add_argument('--path', dest='path', type=str, default='model')
+    # Pretrained model path
+    parser.add_argument('--prtmodel_path', dest='prtmodel_path', type=str, default='/data1/wangyanqing/models/webFG2020')
     # Training and test data path
     parser.add_argument('--data_base', dest='data_base', type=str)
     # Learning rate, weight decay, epochs and batch size
@@ -338,7 +385,8 @@ if __name__ == '__main__':
             'cos':args.cos,
             'tk': args.tk,
             'warmup': args.warmup,
-            'step': args.step
+            'step': args.step,
+            'prtmodel_path':args.prtmodel_path
         }
     manager = Manager(options)
     manager.train()

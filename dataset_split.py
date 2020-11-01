@@ -19,10 +19,10 @@ if __name__ == '__main__':
     x_train, x_val, y_train, y_val = train_test_split(fpath, labels, random_state=23, test_size=0.2)
     print(len(x_train), len(x_val))
 
-    with open('train_sub.txt', 'w')as f:
+    with open('train.txt', 'w')as f:
         for fn, l in zip(x_train, y_train):
             f.write('{} {}\n'.format(fn, l))
 
-    with open('val_sub.txt', 'w')as f:
+    with open('val.txt', 'w')as f:
         for fn, l in zip(x_val, y_val):
             f.write('{} {}\n'.format(fn, l))

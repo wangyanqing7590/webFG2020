@@ -116,14 +116,14 @@ class ResNet50(nn.Module):
     101: ([3, 4, 23, 3], bottleneck),
     152: ([3, 8, 36, 3], bottleneck)
     """
-    def __init__(self, n_classes=200, pretrained=True, use_two_step=False):
+    def __init__(self, n_classes=200):
         super().__init__()
-        print('| A ResNet50 network is instantiated, pre-trained: {}, '
-              'two-step-training: {}, number of classes: {}'.format(pretrained, use_two_step, n_classes))
 
-        self._pretrained = pretrained
+        print('| A ResNet50 network is instantiated,number of classes: {}'.format( n_classes))
+
+        # self._pretrained = pretrained
         self._n_classes = n_classes
-        resnet = torchvision.models.resnet50(pretrained=self._pretrained)
+        resnet = torchvision.models.resnet50()
         # feature output is (N, 2048)
         self.features = nn.Sequential(
             resnet.conv1,
@@ -138,14 +138,15 @@ class ResNet50(nn.Module):
         self.avgpool = nn.AdaptiveAvgPool2d(output_size=(1, 1))
         self.fc = nn.Linear(in_features=2048, out_features=self._n_classes)
 
-        if self._pretrained:
-            # Init the fc layer
-            nn.init.kaiming_normal_(self.fc.weight.data)
-            if self.fc.bias is not None:
-                nn.init.constant_(self.fc.bias.data, val=0)
-            if use_two_step:
-                for params in self.features.parameters():
-                    params.required_grad = False
+        # if self._pretrained:
+        #     # Init the fc layer
+        #     nn.init.kaiming_normal_(self.fc.weight.data)
+        #     if self.fc.bias is not None:
+        #         nn.init.constant_(self.fc.bias.data, val=0)
+        #     if freeze:
+        #         for params in self.features.parameters():
+        #             params.required_grad = False
+        #             print("useing freeze......................")
 
     def forward(self, x):
         N = x.size(0)
@@ -207,7 +208,7 @@ class ResNet50_Normalized(nn.Module):
         return x
 
 if __name__ == '__main__':
-    net = ResNet50()
-    x = torch.rand(64, 3, 448, 448)
+    net = ResNet50(1000)
+    x = torch.rand(64, 3, 224, 224)
     y = net(x)
     print(y.shape)
