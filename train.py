@@ -15,8 +15,7 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 import time
 
-# torch.manual_seed(0)
-# torch.cuda.manual_seed(0)
+
 
 class Manager(object):
     def __init__(self, options):
@@ -39,8 +38,8 @@ class Manager(object):
         self._tk = options['tk']
         self._warmup= options['warmup']
         self._step = options['step']
-        self._prtmodel = os.path.join(options['prtmodel_path'], options['net'] + '_uniform_e200.pth')
-        print('Basic information: ','net:',options['net'], 'prtmodel:',self._prtmodel,'data:',self._data_base,'  lr:', self._options['base_lr'],'  w_decay:', self._options['weight_decay'])
+        self._prt_model = options['prt_model']
+        print('Basic information: ','net:',options['net'], 'prt_model:',self._prt_model,'data:',self._data_base,'  lr:', self._options['base_lr'],'  w_decay:', self._options['weight_decay'])
         print('Parameter information: ','denoise:',self._denoise,'  drop_rate:',self._drop_rate,'  smooth:',self._smooth,'  label_weight:',self._label_weight,'  tk:',self._tk, '  warmup:',self._warmup)
         print('------------------------------------------------------------------------------')
         # Network
@@ -52,36 +51,7 @@ class Manager(object):
         else:
             raise AssertionError('Not implemented yet')
 
-        # if self._step == 1:
-        #     net = NET(n_classes=options['n_classes'], pretrained=True)
-        # elif self._step == 2:
-        #     net = NET(n_classes=options['n_classes'], pretrained=False)
-        # else:
-        #     raise AssertionError('Wrong step')
-
-        # self._net = net.cuda()
-
-        net = NET(n_classes=options['n_classes'])
-
-        
-        print('Loading model from %s' % (self._prtmodel))
-        
-        checkpoint = torch.load(self._prtmodel)          
-        model_state = checkpoint['state_dict_best']
-        
-        # self.centroids = checkpoint['centroids'] if 'centroids' in checkpoint else None
-        
-        weights = model_state['feat_model']
-        weights = {k: weights[k] for k in weights if k in net.state_dict()}
-        x = net.state_dict()
-        x.update(weights)
-        net.load_state_dict(x)
-
-
-
-        for params in net.features.parameters():
-            params.required_grad = False
-        print("useing freeze......................")
+        net = NET(n_classes=options['n_classes'])   
 
 
         if torch.cuda.device_count() >= 1:
@@ -89,30 +59,58 @@ class Manager(object):
             print('cuda device : ', torch.cuda.device_count())
         else:
             raise EnvironmentError('This is designed to run on GPU but no GPU is found')
-
+        
+ 
         # print(self._net)
         # Criterion
         self._criterion = torch.nn.CrossEntropyLoss().cuda()
         # Optimizer
 
 
-        # if options['net'] == 'bcnn':
-        #     # bcnn needs two-step training
-        #     if self._step == 1:
-        #         params_to_optimize = self._net.module.fc.parameters()
-        #         print('step1')
-        #     else:
-        #         self._net.load_state_dict(torch.load(os.path.join(self._path, 'bcnn_step1.pth')))
-        #         print('step2, loading model')
-        #         params_to_optimize = self._net.parameters()
-        # else:
-        #     params_to_optimize = self._net.parameters()
-        
-        params_to_optimize = self._net.module.fc.parameters()
+        if self._step == 1:
 
+            print('Loading model from {}_uniform_e200.pth'.format(options['net']))
+            
+            checkpoint = torch.load('/data1/wangyanqing/models/webFG2020/{}_uniform_e200.pth'.format(options['net']))          
+            model_state = checkpoint['state_dict_best']
+            
+            # self.centroids = checkpoint['centroids'] if 'centroids' in checkpoint else None
+            
+            new_weights = {}
+            weights = model_state['feat_model']
+            for k, v in weights.items():
+                if(k[:12] == 'module.conv1'):
+                    k = 'features.0' + k[12:]
+                elif(k[:10] == 'module.bn1'):
+                    k = 'features.1' + k[10:]
+                elif(k[:13] == 'module.layer1'):
+                    k = 'features.4' + k[13:]
+                elif(k[:13] == 'module.layer2'):
+                    k = 'features.5' + k[13:]
+                elif(k[:13] == 'module.layer3'):
+                    k = 'features.6' + k[13:]
+                elif(k[:13] == 'module.layer4'):
+                    k = 'features.7' + k[13:]
+                else:
+                    print('match error : {}'.format(k))
+                new_weights[k] = v
+            x = net.state_dict()
+            x.update(new_weights)
+            net.load_state_dict(x) 
+            for params in net.features.parameters():
+                params.required_grad = False
+            params_to_optimize = self._net.module.fc.parameters()
+            print('step1')
+        else:
+            self._net.load_state_dict(torch.load(os.path.join(self._path, '{}_step1.pth'.format(options['net']))))
+            print('step2, loading model')
+            params_to_optimize = self._net.parameters()
+
+        
 
         self._optimizer = torch.optim.SGD(params_to_optimize, lr=self._options['base_lr'], momentum=0.9,
                                               weight_decay=self._options['weight_decay'])
+        # self.scheduler = torch.optim.lr_scheduler.StepLR(self._optimizer, step_size=2, gamma=0.9)
         # Learning rate warm-up
         if self._warmup > 0:
             warmup = lambda epoch: epoch / 5
@@ -143,17 +141,16 @@ class Manager(object):
         # Load data
         data_dir = self._data_base
         train_data = Imagefolder_modified(os.path.join(data_dir, 'train.txt'), transform=train_transform)
+        self._train_num = len(train_data)
         # If you want to load images into RAM once, set 'cached=True'
         test_data = Imagefolder_modified(os.path.join(data_dir, 'val.txt'), transform=test_transform, cached=False)
-        # print('number of classes in trainset is : {}'.format(len(train_data.classes)))
-        # print('number of classes in testset is : {}'.format(len(test_data.classes)))
-        # assert len(train_data.classes) == options['n_classes'] and len(test_data.classes) == options['n_classes'], 'number of classes is wrong'
+
         self._train_loader = DataLoader(train_data, batch_size=self._options['batch_size'],
                                         shuffle=True, num_workers=4, pin_memory=True)
-        self._test_loader = DataLoader(test_data, batch_size=16,
+        self._test_loader = DataLoader(test_data, batch_size=512,
                                        shuffle=False, num_workers=4, pin_memory=True)
         self._Cross_entropy_T = []
-        self._logits_softmax_T_1 = [torch.ones(options['n_classes']).cuda() for j in range(len(train_data))]
+        self._logits_softmax_T_1 = [torch.ones(options['n_classes']).cpu() for j in range(len(train_data))]
         self._false_id = []
 
     # Compute probability cross-entropy
@@ -199,6 +196,7 @@ class Manager(object):
         best_accuracy = 0.0
         best_epoch = 0
         print('Epoch\tTrain Loss\tTrain Accuracy\tTest Accuracy\tEpoch Runtime')
+        _logits_softmax_T_1 = [torch.ones(options['n_classes']).cpu() for j in range(self._train_num)]
         for t in range(self._options['epochs']):
             if self._warmup >t:
                 self._warmupscheduler.step()
@@ -209,6 +207,7 @@ class Manager(object):
             num_total = 0
             num_remember = 0
             Cross_entropy_now = []
+            steps = 0
             for X, y, id, path in self._train_loader:
                 # Enable training mode
                 self._net.train(True)
@@ -217,7 +216,6 @@ class Manager(object):
                 y = y.cuda()
                 # Forward pass
                 score = self._net(X)  # score is in shape (N, 200)
-
                 if self._denoise and t > 1:
                     # Global Selection
                     loss = self.selection_loss(score, y,id)
@@ -232,14 +230,16 @@ class Manager(object):
                 # Prediction
                 closest_dis, prediction = torch.max(score.data, 1)
 
+                logits_softmax = F.softmax(score, dim=1).clone().detach()
+                # logits_softmax = F.softmax(score, dim=1)
                 for i in range(id.shape[0]):
-                    logits_softmax = F.softmax(score, dim=1).clone().detach()
                     # Compute probability cross-entropy
-                    ce = self.cross_entropy(self._logits_softmax_T_1[id[i]], logits_softmax[i])
+                    ce = self.cross_entropy(_logits_softmax_T_1[id[i]], logits_softmax[i].detach().cpu())
+                    # ce = torch.rand(1)
                     # Record softmax probability
-                    self._logits_softmax_T_1[id[i]] = logits_softmax[i]
+                    _logits_softmax_T_1[id[i]] = logits_softmax[i].cpu()
                     tmp = []
-                    tmp.append(id[i].clone())
+                    tmp.append(id[i].clone().cpu())
                     tmp.append(ce)
                     Cross_entropy_now.append(tmp)
 
@@ -252,6 +252,9 @@ class Manager(object):
                 # Backward
                 loss.backward()
                 self._optimizer.step()
+                steps += 1
+                if(steps % 370 == 0):
+                    print('train : %d\t%4.2f%%\t\t%4.3f\t\t%4.2f%%\t\t%s' % (t + 1,steps * 100 * 128 / 473587,  loss.item(),torch.sum(prediction == y.data).item() / y.size(0),time.asctime(time.localtime())))
             # Record the train accuracy of each epoch
             train_accuracy = 100 * num_correct / num_total
             test_accuracy = self.test(self._test_loader)
@@ -270,30 +273,31 @@ class Manager(object):
                 self._false_id = all_id[num_remember:]
 
             epoch_end = time.time()
-
             if test_accuracy > best_accuracy:
                 best_accuracy = test_accuracy
                 best_epoch = t +1
                 print('*', end='')
                 # Save mode
-                if options['net'] == 'bcnn':
+                # if options['net'] == 'bcnn':
                     # Save mode for each step
-                    torch.save(self._net.state_dict(), os.path.join(self._path, 'bcnn_step{}.pth'.format(self._step)))
-                else:
-                    torch.save(self._net.state_dict(), os.path.join(self._path, options['net'] + '.pth'))
-            print('%d\t%4.3f\t\t%4.2f%%\t\t%4.2f%%\t\t%4.2f\t\t%4.2f' % (t + 1, sum(epoch_loss) / len(epoch_loss),
+                torch.save(self._net.state_dict(), os.path.join(self._path, options['net'] + '_step{}.pth'.format(self._step)))
+                # else:
+                    # torch.save(self._net.state_dict(), os.path.join(self._path, options['net'] + '.pth'))
+            # self.scheduler.step()
+            print('%d\t%4.3f\t\t%4.2f%%\t\t%4.2f%%\t\t%4.2f\t\t%4.2f\t\t%5f' % (t + 1, sum(epoch_loss) / len(epoch_loss),
                                                             train_accuracy, test_accuracy,
-                                                            epoch_end - epoch_start, num_remember))
+                                                            epoch_end - epoch_start, num_remember, self._optimizer.param_groups[0]["lr"] ))
+            
                                                           
             with open(logfile, "a") as f:
-                output = '%d\t%4.3f\t\t%4.2f%%\t\t%4.2f%%\t\t%4.2f\t\t%4.2f' % (t + 1, sum(epoch_loss) / len(epoch_loss),
+                output = '%d\t%4.3f\t\t%4.2f%%\t\t%4.2f%%\t\t%4.2f\t\t%4.2f\t\t%5f' % (t + 1, sum(epoch_loss) / len(epoch_loss),
                                                             train_accuracy, test_accuracy,
-                                                            epoch_end - epoch_start, num_remember)
+                                                            epoch_end - epoch_start, num_remember, self._optimizer.param_groups[0]["lr"])
                 f.write(output + "\n")
 
 
         print('******\n'
-        'Best Accuracy 1: [{0:6.2f}], at Epoch [{1:03d}] '
+        'Best Accuracy 1: [{0:6.2f}%], at Epoch [{1:03d}] '
         '\n******'.format(best_accuracy, best_epoch))
         with open(logfile, "a") as f:
             output = '******\n' \
@@ -331,13 +335,13 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='PyTorch Training')
     parser.add_argument('--net', dest='net', type=str, default='resnet50',
-                        help='supported options: resnet18, resnet50')
-    parser.add_argument('--n_classes', dest='n_classes', type=int, default=200,
+                        help='supported options: resnet152, resnet50')
+    parser.add_argument('--n_classes', dest='n_classes', type=int, default=100,
                         help='number of classes')
     # Path to save model
     parser.add_argument('--path', dest='path', type=str, default='model')
     # Pretrained model path
-    parser.add_argument('--prtmodel_path', dest='prtmodel_path', type=str, default='/data1/wangyanqing/models/webFG2020')
+    parser.add_argument('--prt_model', dest='prt_model', type=str)
     # Training and test data path
     parser.add_argument('--data_base', dest='data_base', type=str)
     # Learning rate, weight decay, epochs and batch size
@@ -386,7 +390,7 @@ if __name__ == '__main__':
             'tk': args.tk,
             'warmup': args.warmup,
             'step': args.step,
-            'prtmodel_path':args.prtmodel_path
+            'prt_model':args.prt_model
         }
     manager = Manager(options)
     manager.train()

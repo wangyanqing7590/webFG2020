@@ -116,14 +116,14 @@ class ResNet50(nn.Module):
     101: ([3, 4, 23, 3], bottleneck),
     152: ([3, 8, 36, 3], bottleneck)
     """
-    def __init__(self, n_classes=200):
+    def __init__(self, n_classes=200, prt = False):
         super().__init__()
 
         print('| A ResNet50 network is instantiated,number of classes: {}'.format( n_classes))
 
         # self._pretrained = pretrained
         self._n_classes = n_classes
-        resnet = torchvision.models.resnet50()
+        resnet = torchvision.models.resnet50(pretrained=prt)
         # feature output is (N, 2048)
         self.features = nn.Sequential(
             resnet.conv1,

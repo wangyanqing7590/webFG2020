@@ -59,7 +59,7 @@ def make_dataset(txt_file):
 
     with open(txt_file) as f:
         for line in f:
-            item = (line.split()[0], int(line.split()[1]) - 2000)
+            item = (line.split()[0], int(line.split()[1]))
             images.append(item)
 
     return images

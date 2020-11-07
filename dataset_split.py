@@ -2,7 +2,7 @@ from sklearn.model_selection import train_test_split
 import os
 
 if __name__ == '__main__':
-    root = '/data1/wangyanqing/data/webFG2020_sub/'
+    root = '/data1/wangyanqing/data/webFG_5000/'
 
     fpath = []
     labels = []
@@ -16,7 +16,7 @@ if __name__ == '__main__':
             
     print(len(fpath), len(labels))
     
-    x_train, x_val, y_train, y_val = train_test_split(fpath, labels, random_state=23, test_size=0.2)
+    x_train, x_val, y_train, y_val = train_test_split(fpath, labels, random_state=23, test_size=0.15)
     print(len(x_train), len(x_val))
 
     with open('train.txt', 'w')as f:
